@@ -3,73 +3,60 @@
 #include "blur_filter.h"
 #include <cuda_runtime.h>
 #include <math.h>
-
-
 #define CONV(j, k, width) ((j) * (width) + (k))
-#define BLOCK_DIM 16
-#define MAX_BLUR_SIZE 5
-#define SHARED_MEM_SIZE (BLOCK_DIM + 2 * MAX_BLUR_SIZE + 1)  // Added +1 for padding
-
-#define CONV(j, k, width) ((j) * (width) + (k))
-#define BLOCK_DIM 16
-#define MAX_BLUR_SIZE 5
-#define SHARED_MEM_SIZE (BLOCK_DIM + 2 * MAX_BLUR_SIZE)
 
 __global__ void blur_kernel(pixel* oldImg, pixel* newImg, int width, int height, int size) {
-    __shared__ pixel smem[SHARED_MEM_SIZE][SHARED_MEM_SIZE];
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (j >= height || k >= width) return;
 
-    int tx = threadIdx.x, ty = threadIdx.y;
-    int bx = blockIdx.x * BLOCK_DIM - size;
-    int by = blockIdx.y * BLOCK_DIM - size;
+    // top part
+    if (j>=size && j < height/10-size && k>=size && k < width-size) {
+        int t_r = 0;
+        int t_g = 0;
+        int t_b = 0;
 
-    // Global indices with halo
-    int gx = bx + tx;
-    int gy = by + ty;
-
-    // Load data into shared memory with clamping
-    if (gx >= 0 && gx < width && gy >= 0 && gy < height)
-        smem[ty][tx] = oldImg[CONV(gy, gx, width)];
-    else
-        smem[ty][tx] = {0, 0, 0};
-
-    __syncthreads();
-
-    // Calculate output indices (original block without halo)
-    int out_x = blockIdx.x * BLOCK_DIM + threadIdx.x - size;
-    int out_y = blockIdx.y * BLOCK_DIM + threadIdx.y - size;
-
-    if (out_x >= 0 && out_x < width && out_y >= 0 && out_y < height) {
-        bool in_top = (out_y >= size) && (out_y < height/10 - size) && (out_x >= size) && (out_x < width - size);
-        bool in_bottom = (out_y >= height*0.9 + size) && (out_y < height - size) && (out_x >= size) && (out_x < width - size);
-
-        if (in_top || in_bottom) {
-            int t_r = 0, t_g = 0, t_b = 0;
-            int count = 0;
-
-            for (int dy = -size; dy <= size; dy++) {
-                for (int dx = -size; dx <= size; dx++) {
-                    int sy = ty + dy + size;
-                    int sx = tx + dx + size;
-
-                    if (sy >= 0 && sy < SHARED_MEM_SIZE && sx >= 0 && sx < SHARED_MEM_SIZE) {
-                        t_r += smem[sy][sx].r;
-                        t_g += smem[sy][sx].g;
-                        t_b += smem[sy][sx].b;
-                        count++;
-                    }
-                }
+        for (int stencil_j = -size ; stencil_j <= size ; stencil_j++ )
+        {
+            for (int stencil_k = -size ; stencil_k <= size ; stencil_k++ )
+            {
+                t_r += oldImg[CONV(j+stencil_j,k+stencil_k,width)].r ;
+                t_g += oldImg[CONV(j+stencil_j,k+stencil_k,width)].g ;
+                t_b += oldImg[CONV(j+stencil_j,k+stencil_k,width)].b ;
             }
-
-            if (count > 0) {
-                newImg[CONV(out_y, out_x, width)].r = t_r / count;
-                newImg[CONV(out_y, out_x, width)].g = t_g / count;
-                newImg[CONV(out_y, out_x, width)].b = t_b / count;
-            }
-        } else {
-            newImg[CONV(out_y, out_x, width)] = oldImg[CONV(out_y, out_x, width)];
         }
+        newImg[CONV(j,k,width)].r = t_r / ( (2*size+1)*(2*size+1) ) ;
+        newImg[CONV(j,k,width)].g = t_g / ( (2*size+1)*(2*size+1) ) ;
+        newImg[CONV(j,k,width)].b = t_b / ( (2*size+1)*(2*size+1) ) ;
+    }
+    // bottom part
+    else if(j>=height*0.9+size && j<height-size && k>=size && k<width-size){
+        int t_r = 0 ;
+        int t_g = 0 ;
+        int t_b = 0 ;
+        for (int stencil_j = -size ; stencil_j <= size ; stencil_j++ )
+        {
+            for (int stencil_k = -size ; stencil_k <= size ; stencil_k++ )
+            {
+                t_r += oldImg[CONV(j+stencil_j,k+stencil_k,width)].r ;
+                t_g += oldImg[CONV(j+stencil_j,k+stencil_k,width)].g ;
+                t_b += oldImg[CONV(j+stencil_j,k+stencil_k,width)].b ;
+            }
+        }
+        newImg[CONV(j,k,width)].r = t_r / ( (2*size+1)*(2*size+1) ) ;
+        newImg[CONV(j,k,width)].g = t_g / ( (2*size+1)*(2*size+1) ) ;
+        newImg[CONV(j,k,width)].b = t_b / ( (2*size+1)*(2*size+1) ) ;
+    }
+    // middle part
+    else{
+        newImg[CONV(j, k, width)].r = oldImg[CONV(j, k, width)].r;
+        newImg[CONV(j, k, width)].g = oldImg[CONV(j, k, width)].g;
+        newImg[CONV(j, k, width)].b = oldImg[CONV(j, k, width)].b;
     }
 }
+
+
 __global__ void checkConvergence(
     pixel *oldImg, pixel *newImg, int *end, int width, int height, int threshold) 
 {
