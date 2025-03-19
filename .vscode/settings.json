@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "omp.h": "c",
+        "gif_lib.h": "c",
+        "stdio.h": "c"
+    }
+}
